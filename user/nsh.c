@@ -21,7 +21,6 @@ char *simple_tok(char *p, char d)
     return p + 1;
 }
 
-
 // [in-place]
 // trim spaces on both side
 char *trim(char *c)
@@ -70,10 +69,14 @@ void handle(char *cmd)
             argc++;
             c = buf[argc];
         }
-        else {
-            if(*p == '<') {
+        else
+        {
+            if (*p == '<')
+            {
                 input_pos = argc + 1;
-            } if(*p == '>') {
+            }
+            if (*p == '>')
+            {
                 output_pos = argc + 1;
             }
             *c++ = *p;
@@ -85,21 +88,26 @@ void handle(char *cmd)
 
     // fprintf(2, "inpos: %d, outpos: %d\n", input_pos, output_pos);
 
-    if(input_pos) {
+    if (input_pos)
+    {
         close(0);
         open(pass[input_pos], O_RDONLY);
     }
 
-    if(output_pos) {
+    if (output_pos)
+    {
         close(1);
         open(pass[output_pos], O_WRONLY | O_CREATE);
     }
 
     char *pass2[32];
     int argc2 = 0;
-    for(int pos = 0; pos < argc; pos++) {
-        if(pos == input_pos - 1) pos += 2;
-        if(pos == output_pos - 1) pos += 2;
+    for (int pos = 0; pos < argc; pos++)
+    {
+        if (pos == input_pos - 1)
+            pos += 2;
+        if (pos == output_pos - 1)
+            pos += 2;
         pass2[argc2++] = pass[pos];
     }
     pass2[argc2] = 0;
@@ -123,13 +131,18 @@ void handle_cmd()
         // int parent_pid = getpid();
         // fprintf(2, "pid: %d, cmd: %s\n", parent_pid, a);
 
-        if(!fork()){
+        if (!fork())
+        {
             // fprintf(2, "%d -> %d source\n", parent_pid, getpid());
-            if(n) redirect(1, pd);
+            if (n)
+                redirect(1, pd);
             handle(a);
-        } else if(!fork()) {
+        }
+        else if (!fork())
+        {
             // fprintf(2, "%d -> %d sink\n", parent_pid, getpid());
-            if(n) {
+            if (n)
+            {
                 redirect(0, pd);
                 a = n;
                 n = simple_tok(a, '|');
