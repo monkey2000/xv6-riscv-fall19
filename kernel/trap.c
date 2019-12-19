@@ -67,12 +67,50 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    // 13: Page load fault, 15: Page store fault
+    // printf("usertrap(): page fault, scause %p pid=%d\n", r_scause(), p->pid);
+    // printf("            sepc=%p vaddr=%p\n", r_sepc(), r_stval());
+
+    struct proc *p = myproc();
+    pagetable_t pagetable = p->pagetable;
+    uint64 fault_vaddr = (uint64) r_stval();
+    uint64 vpage_base = PGROUNDDOWN(fault_vaddr);
+
+    if(fault_vaddr >= p->sz) {
+      // printf("usertrap(): page fault: invalid memory access to vaddr %p\n", fault_vaddr);
+      p->killed = 1;
+      goto end;
+    }
+
+    if(fault_vaddr < p->ustack) {
+      // printf("usertrap(): page fault: segfault on vaddr %p below stack %p\n", fault_vaddr, p->ustack);
+      p->killed = 1;
+      goto end;
+    }
+
+    char *mem = kalloc();
+    if(mem == 0) {
+      // printf("usertrap(): page fault: no more physical page available, killing process due to a OOM\n");
+      p->killed = 1;
+      goto end;
+    }
+
+    memset(mem, 0, PGSIZE);
+
+    if(mappages(pagetable, vpage_base, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+      // printf("usertrap(): page fault: cannot map a page");
+      kfree(mem);
+      p->killed = 1;
+      goto end;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+end:
   if(p->killed)
     exit(-1);
 
