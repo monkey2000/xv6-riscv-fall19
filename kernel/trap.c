@@ -67,12 +67,49 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 15) {
+    // 15: load page fault
+    uint64 fault_addr = r_stval();
+    uint64 vpage_head = PGROUNDDOWN(fault_addr);
+
+    pte_t *pte;
+    if((pte = walk(p->pagetable, vpage_head, 0)) == 0) {
+      printf("usertrap(): page not found\n");
+      p->killed = 1;
+      goto end;
+    }
+
+    if((*pte | PTE_V) && (*pte | PTE_U) && (*pte | PTE_COW)) {
+      char *mem = kalloc();
+      if(mem == 0) {
+        printf("usertrap(): no more physical page found, exit due to OOM\n");
+        p->killed = 1;
+        goto end;
+      }
+
+      char *pa = (char *)PTE2PA(*pte);
+      memmove(mem, pa, PGSIZE);
+      uint flags = PTE_FLAGS(*pte);
+      uint newflags = flags & (~PTE_COW);
+      newflags |= PTE_W;
+
+      uvmunmap(p->pagetable, vpage_head, PGSIZE, 0);
+      kderef((void*)pa);
+      if(mappages(p->pagetable, vpage_head, PGSIZE, (uint64)mem, newflags) != 0) {
+        panic("usertrap(): cannot map page\n");
+      }
+    } else {
+      printf("usertrap(): page not found\n");
+      p->killed = 1;
+      goto end;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+end:
   if(p->killed)
     exit(-1);
 
