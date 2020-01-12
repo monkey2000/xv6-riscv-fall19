@@ -27,6 +27,8 @@ int ntas();
 int crash(const char*, int);
 int mount(char*, char *);
 int umount(char*);
+int sigalarm(int, void (*func)());
+int sigreturn(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

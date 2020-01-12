@@ -1,0 +1,9 @@
+1. Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?
+	According to riscv user-level isa （in `doc/riscv-calling.pdf`） ， 16 registers `a0-a7` and `fa0-fa7` are used for passing arguments.
+	To be specific，according to `user/call.asm`，register `a2` holds 13 in the call to printf.
+2. Where is the function call to f from main? Where is the call to g? (Hint: the compiler may inline functions.)
+	We can know that f(8)+1 = 12. Also, in function main, there's no explicit call to f. Thus, I assume that f is evaluated at compile-time and inlined as an immediate number.
+3. At what address is the function printf located?
+	0x0000000000000030 + 1440 = 0x00000000000005d0
+4. What value is in the register ra just after the jalr to printf in main?
+	ra = pc + 4

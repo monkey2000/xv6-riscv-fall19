@@ -24,6 +24,7 @@ struct cpu {
   struct context scheduler;   // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
+  struct proc *alarm_proc;    // The process that shall be alarmed, or null
 };
 
 extern struct cpu cpus[NCPU];
@@ -103,4 +104,9 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int alarm_interval;          // Alarm's interval (0 for disabled)
+  uint64 alarm_handler;        // Virtual address of the alarm handler (can be 0 due to xv6-rv's memory layout)
+  uint64 alarm_last_tick;      // Ticks of the last call
+  struct trapframe alarm_tf;   // trapframe for storing original tf
+  uint alarm_state;            // 1 if the handler hasn't return
 };
