@@ -129,6 +129,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
 [SYS_ntas]    sys_ntas,
+[SYS_mmap]    sys_mmap,
+[SYS_munmap]  sys_munmap,
 };
 
 void

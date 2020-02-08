@@ -275,6 +275,14 @@ fork(void)
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
+  
+  for(i = 0; i < MMAP_NUM; i++) {
+    if(p->minfo[i].used) {
+      np->minfo[i] = p->minfo[i];
+      mmap_dup(np->pagetable, np->minfo);
+    }
+  }
+
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
@@ -331,6 +339,15 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  // remove all pte related to mmap
+  for(int i = 0; i < MMAP_NUM; i++) {
+    if(p->minfo[i].used) {
+      struct map_info *m = &p->minfo[i];
+      m->used = 0;
+      mmap_dedup(p->pagetable, m);
     }
   }
 

@@ -21,13 +21,17 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  uint *ref_count;
 } kmem;
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  kmem.ref_count = (uint*)end;
+  uint64 rc_pages = ((((PHYSTOP - (uint64)end) >> 12) + 1) * sizeof(uint) >> 12) + 1;
+  uint64 rc_offset = (uint64)rc_pages << 12;
+  freerange(end + rc_offset, (void*)PHYSTOP);
 }
 
 void
@@ -53,12 +57,14 @@ kfree(void *pa)
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-
+  
   r = (struct run*)pa;
 
+  uint64 idx = ((uint64)pa - (uint64)end) >> 12;
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
+  kmem.ref_count[idx] = 0;
   release(&kmem.lock);
 }
 
@@ -72,11 +78,38 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r) {
     kmem.freelist = r->next;
+    uint64 idx = ((uint64)r - (uint64)end) >> 12;
+    kmem.ref_count[idx] = 1;
+  }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void
+kref(void* pa) {
+  uint64 idx = ((uint64)pa - (uint64)end) >> 12;
+
+  acquire(&kmem.lock);
+  kmem.ref_count[idx]++;
+  release(&kmem.lock);
+}
+
+void
+kderef(void* pa) {
+  uint64 idx = ((uint64)pa - (uint64)end) >> 12;
+  char shall_free = 0;
+
+  acquire(&kmem.lock);
+  kmem.ref_count[idx]--;
+  if(kmem.ref_count[idx] == 0)
+    shall_free = 1;
+  release(&kmem.lock);
+
+  if(shall_free)
+    kfree(pa);
 }

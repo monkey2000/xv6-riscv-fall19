@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -70,12 +74,61 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    // 13 for load page fault, 15 for store page fault
+    uint64 fault_vaddr = r_stval();
+    if(fault_vaddr >= MMAP_VSTART && fault_vaddr < MMAP_VEND) {
+      pagetable_t pagetable = p->pagetable;
+      uint64 vpage_base = PGROUNDDOWN(fault_vaddr);
+      int map_sel = (vpage_base - MMAP_VSTART) / MMAP_SIZE;
+      struct map_info *map = &p->minfo[map_sel];
+      uint64 map_start = map->vstart;
+
+      // check for invalid mapping & access
+      if(map->used == 0 || fault_vaddr >= map->vend) {
+        printf("usertrap(): segfault pid=%d epc=%p\n", p->pid, r_sepc());
+        p->killed = 1;
+        goto end;
+      }
+
+      uint64 file_start = vpage_base - map_start;
+      uint64 read_length = PGSIZE;
+      if(read_length > map->length - file_start)
+        read_length = map->length - file_start;
+      
+      struct file *f = map->file;
+      int prot = ((map->prot & PROT_READ) ? PTE_R : 0) | ((map->prot & PROT_WRITE) ? PTE_W : 0);
+
+      char *mem = kalloc();
+      if(mem == 0) {
+        printf("usertrap(): segfault: no more physical page available, killing process due to a OOM\n");
+        p->killed = 1;
+        goto end;
+      }
+
+      memset(mem, 0, PGSIZE);
+      ilock(f->ip);
+      readi(f->ip, 0, (uint64)mem, file_start, read_length);
+      iunlock(f->ip);
+
+      if(mappages(pagetable, vpage_base, PGSIZE, (uint64)mem, prot|PTE_U) != 0){
+        printf("usertrap(): segfault: cannot map a page");
+        kfree(mem);
+        p->killed = 1;
+        goto end;
+      }
+    } else {
+      printf("usertrap(): unexpected scause %p (%s) pid=%d\n", r_scause(), scause_desc(r_scause()), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p (%s) pid=%d\n", r_scause(), scause_desc(r_scause()), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+end:
   if(p->killed)
     exit(-1);
 

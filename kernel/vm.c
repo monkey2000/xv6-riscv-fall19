@@ -5,6 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "proc.h"
+#include "file.h"
+#include "fcntl.h"
 
 /*
  * the kernel's page table.
@@ -449,5 +454,136 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }
+}
+
+// mapped pages are located above 128G, 1G for each mapping
+struct map_info* map_alloc() {
+  struct proc *p = myproc();
+  for(int i=0;i<MMAP_NUM;i++) {
+    if(p->minfo[i].used == 0) {
+      p->minfo[i].vstart = MMAP_VSTART + i * MMAP_SIZE;
+      return &p->minfo[i];
+    }
+  }
+  return 0;
+}
+
+uint64 sys_mmap(void) {
+  struct proc *p = myproc();
+  uint64 addr;
+  int length, prot, flags, fd, offset;
+
+  if(argaddr(0, &addr) < 0)
+    return -1;
+  
+  if(argint(1, &length) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0
+    || argint(4, &fd) < 0 || argint(5, &offset) < 0)
+    return -1;
+  
+  // assumption: addr and offset shall all be zero
+  if(addr != 0 || offset != 0)
+    return -1;
+
+  if(p->ofile[fd] == 0 || p->ofile[fd]->type != FD_INODE)
+    return -1;
+
+  struct file *f = p->ofile[fd];
+  if((flags & MAP_SHARED) && (prot & PROT_WRITE) && !f->writable)
+    return -1;
+
+  struct map_info *map;
+  if((map = map_alloc()) == 0)
+    return -1;
+  
+  map->vend = PGROUNDUP(map->vstart + length);
+  map->length = length;
+  map->prot = prot;
+  map->flags = flags;
+  map->file = f;
+  map->offset = offset;
+  map->used = 1;
+
+  filedup(map->file);
+
+  return map->vstart;
+}
+
+uint64 sys_munmap(void) {
+  struct proc *p = myproc();
+  uint64 addr;
+  int length;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+
+  if(addr < MMAP_VSTART || addr > MMAP_VEND)
+    return -1;
+  
+  uint64 vpage_base = PGROUNDDOWN(addr);
+  int map_sel = (vpage_base - MMAP_VSTART) / MMAP_SIZE;
+  struct map_info *map = &p->minfo[map_sel];
+
+  if(map->used == 0)
+    return -1;
+  
+  static pte_t *pte;
+  uint64 pa;
+  for(uint64 va = vpage_base; va < addr + length; va += PGSIZE) {
+    if((pte = walk(p->pagetable, va, 0)) && (*pte & PTE_V)) {
+      pa = PTE2PA(*pte);
+      if((map->flags & MAP_SHARED) && (*pte & PTE_D)) { // dirty page
+        // printf("dirty!\n");
+        uint64 file_start = va - vpage_base;
+        uint64 write_length = PGSIZE;
+        if(write_length > map->length - file_start)
+          write_length = map->length - file_start;
+        struct file *f = map->file;
+
+        begin_op(f->ip->dev);
+        ilock(f->ip);
+        writei(f->ip, 0, pa, file_start, write_length);
+        // printf("%d bytes wrote, start = %d, length = %d\n", p, file_start, write_length);
+        iunlock(f->ip);
+        end_op(f->ip->dev);
+      }
+      uvmunmap(p->pagetable, va, PGSIZE, 0);
+      kderef((void*)pa);
+    }
+  }
+
+  if(map->vstart == addr && map->length == length) {
+    fileclose(map->file);
+    map->used = 0;
+  } else {
+    if(map->vstart == addr)
+      map->vstart = addr + length;
+    if(map->vend == addr + length)
+      map->vend = addr;
+  }
+
+  return 0;
+}
+
+void mmap_dup(pagetable_t pagetable, struct map_info *m) {
+  static pte_t *pte;
+  uint64 pa;
+  for (uint64 va = m->vstart; va < m->vend; va += PGSIZE) {
+    if ((pte = walk(pagetable, va, 0)) && (*pte & PTE_V)) {
+      pa = PTE2PA(*pte);
+      kref((void *)pa);
+    }
+  }
+}
+
+void mmap_dedup(pagetable_t pagetable, struct map_info *m) {
+  static pte_t *pte;
+  uint64 pa;
+  for (uint64 va = m->vstart; va < m->vend; va += PGSIZE) {
+    if ((pte = walk(pagetable, va, 0)) && (*pte & PTE_V)) {
+      pa = PTE2PA(*pte);
+      uvmunmap(pagetable, va, PGSIZE, 0);
+      kderef((void *)pa);
+    }
   }
 }
