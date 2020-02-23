@@ -61,7 +61,7 @@ sockalloc(struct file **f, uint32 raddr, uint16 lport, uint16 rport)
   while (pos) {
     if (pos->raddr == raddr &&
         pos->lport == lport &&
-	pos->rport == rport) {
+	      pos->rport == rport) {
       release(&lock);
       goto bad;
     }
@@ -80,23 +80,96 @@ bad:
   return -1;
 }
 
-//
-// Your code here.
-//
-// Add and wire in methods to handle closing, reading,
-// and writing for network sockets.
-//
+void
+sockclose(struct sock *so) {
+  acquire(&so->lock);
+  wakeup(&so->rxq);
+  release(&so->lock);
+
+  acquire(&lock);
+  struct sock *sop = sockets;
+  if(sop->next == 0)
+    sockets = 0;
+  while (sop && sop->next) {
+    if (sop->next->raddr == so->raddr &&
+        sop->next->lport == so->lport &&
+	      sop->next->rport == so->rport) {
+      sop->next = so->next;
+      break;
+    }
+    sop = sop->next;
+  }
+  release(&lock);
+
+  kfree((char*)so);
+}
+
+int
+sockwrite(struct sock *so, uint64 addr, int n) {
+  struct proc *p = myproc();
+
+  struct mbuf *m = mbufalloc(sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp));
+
+  mbufput(m, n);
+
+  if(copyin(p->pagetable, m->head, addr, n) == -1) {
+    mbuffree(m);
+    return -1;
+  }
+
+  net_tx_udp(m, so->raddr, so->lport, so->rport);
+
+  return n;
+}
+
+int
+sockread(struct sock *so, uint64 addr, int n) {
+  struct proc *p = myproc();
+
+  acquire(&so->lock);
+
+  if(mbufq_empty(&so->rxq)) {
+    while (mbufq_empty(&so->rxq))
+      sleep(&so->rxq, &so->lock);
+  }
+  
+  struct mbuf *m = mbufq_pophead(&so->rxq);
+  int len = n < m->len ? n : m->len;
+
+  if(copyout(p->pagetable, addr, m->head, len) == -1) {
+    release(&so->lock);
+    mbuffree(m);
+    return -1;
+  }
+
+  release(&so->lock);
+  mbuffree(m);
+  return len;
+}
 
 // called by protocol handler layer to deliver UDP packets
 void
-sockrecvudp(struct mbuf *m, uint32 raddr, uint16 lport, uint16 rport)
-{
-  //
-  // Your code here.
-  //
-  // Find the socket that handles this mbuf and deliver it, waking
-  // any sleeping reader. Free the mbuf if there are no sockets
-  // registered to handle it.
-  //
-  mbuffree(m);
+sockrecvudp(struct mbuf *m, uint32 raddr, uint16 lport, uint16 rport) {
+  struct sock *so = sockets;
+  acquire(&lock);
+  while(so) {
+    if (so->raddr == raddr &&
+        so->lport == lport &&
+	      so->rport == rport) {
+      break;
+    }
+    so = so->next;
+  }
+  release(&lock);
+  
+  // if no socket machted
+  if(so == 0) {
+    mbuffree(m);
+    return;
+  }
+
+  acquire(&so->lock);
+  mbufq_pushtail(&so->rxq, m);
+  release(&so->lock);
+  wakeup(&so->rxq);
 }
